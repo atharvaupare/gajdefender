@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+python-multipart
+lightgbm
+numpy
+scikit-learn
+tqdm
+lief>=0.16.4
+git+https://github.com/elastic/ember.git
