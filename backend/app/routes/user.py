@@ -12,7 +12,7 @@ router = APIRouter()
 @router.get("/users")
 def get_users():
     """
-    GET endpoint to retrieve users.
+    GET endpoint to retrieve users
     """
     return user_controller.get_users_logic()
 
