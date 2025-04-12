@@ -1,0 +1,14 @@
+fastapi
+uvicorn
+python-multipart
+lightgbm
+numpy
+scikit-learn==1.6.1
+pandas
+pefile
+olefile
+joblib
+imbalanced-learn
+lief
+git+https://github.com/elastic/ember.git
+tdqm
