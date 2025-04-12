@@ -1,70 +1,122 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
+import { FiPlus } from "react-icons/fi";
 import { motion } from "framer-motion";
 import Card from "components/card";
 
 const TotalSpent = () => {
-  const [fileName, setFileName] = useState(null);
-  const [loading, setLoading] = useState(false);
-  const [scanReady, setScanReady] = useState(false);
+  const fileInputRef = useRef(null);
+  const [file, setFile] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [scannedResult, setScannedResult] = useState(null);
 
-  const handleFileUpload = async (event) => {
-    const file = event.target.files[0];
-    if (!file) return;
-
-    setLoading(true);
-    setFileName(file.name);
-
-    // Simulate loading (you can replace with actual API call)
-    setTimeout(() => {
-      setLoading(false);
-      setScanReady(true);
-    }, 1500);
+  const handleClick = () => {
+    fileInputRef.current.click();
   };
 
-  const handleScan = () => {
-    if (!scanReady) return;
-    alert("File scanned: " + fileName); // Replace with actual scan logic
+  const handleFileChange = (event) => {
+    const uploadedFile = event.target.files[0];
+    if (uploadedFile) {
+      setFile(uploadedFile);
+      setScannedResult(null); // Reset result on new file
+    }
+  };
+
+  const handleScan = async () => {
+    if (!file) return;
+    setIsLoading(true);
+
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      // Step 1: Upload the file
+      const uploadRes = await fetch("http://localhost:8000/files/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      const uploadData = await uploadRes.json();
+      const uploadedPath = uploadData.file_path;
+
+      if (!uploadedPath) throw new Error("Upload failed");
+
+      // Step 2: Scan using uploaded file path
+      const scanRes = await fetch("http://localhost:8000/hash/scan", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ file_path: uploadedPath }),
+      });
+
+      const result = await scanRes.json();
+      setScannedResult(result);
+    } catch (error) {
+      console.error("Error during scan:", error);
+      setScannedResult({ error: "Scan failed. Try again." });
+    }
+
+    setIsLoading(false);
   };
 
   return (
     <Card extra="!p-[20px] text-center">
       <div className="mb-6 text-xl font-bold text-navy-700 dark:text-white">
-        Upload single file
+        Upload Single File
       </div>
 
-      <label className="text-black mb-4 inline-block cursor-pointer rounded-lg bg-gray-200 px-4 py-2 text-sm hover:bg-gray-300">
-        Upload File
-        <input
-          type="file"
-          accept=".exe,.dll,.pdf,.txt"
-          onChange={handleFileUpload}
-          className="hidden"
-        />
-      </label>
+      <div className="mb-4 flex justify-center">
+        <div
+          className="flex h-40 w-40 cursor-pointer items-center justify-center rounded-xl border-2 border-dashed border-blue-500 transition hover:bg-blue-50"
+          onClick={handleClick}
+        >
+          <FiPlus className="text-4xl text-blue-500" />
+          <input
+            type="file"
+            accept=".exe,.dll,.bin,.dat"
+            ref={fileInputRef}
+            onChange={handleFileChange}
+            className="hidden"
+          />
+        </div>
+      </div>
 
-      {loading && (
-        <motion.div
-          className="border-t-transparent mx-auto mt-4 h-8 w-8 animate-spin rounded-full border-4 border-blue-500"
-          animate={{ rotate: 360 }}
-          transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
-        />
-      )}
-
-      {fileName && !loading && (
-        <div className="mt-2 text-sm text-gray-600">Uploaded: {fileName}</div>
+      {file && (
+        <div className="mb-4 text-sm text-navy-700 dark:text-white">
+          Selected: <strong>{file.name}</strong>
+        </div>
       )}
 
       <button
-        className={`mt-6 rounded-lg px-5 py-2 text-white transition-all duration-300 ${
-          scanReady
-            ? "bg-blue-600 hover:bg-blue-700"
-            : "cursor-not-allowed bg-gray-400"
-        }`}
-        disabled={!scanReady}
+        disabled={!file || isLoading}
         onClick={handleScan}
+        className={`rounded-lg px-6 py-2 text-white transition ${
+          file && !isLoading
+            ? "bg-blue-500 hover:bg-blue-600"
+            : "cursor-not-allowed bg-gray-300"
+        }`}
       >
-        Scan
+        {isLoading ? "Scanning..." : "Scan"}
       </button>
+
+      {isLoading && (
+        <motion.div
+          className="mt-4 flex justify-center"
+          animate={{ rotate: 360 }}
+          transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+        >
+          <div className="border-t-transparent h-6 w-6 animate-spin rounded-full border-4 border-blue-500" />
+        </motion.div>
+      )}
+
+      {scannedResult && (
+        <div className="mt-6 text-left text-sm text-navy-700 dark:text-white">
+          <div className="font-semibold">Scan Result:</div>
+          <pre className="mt-2 whitespace-pre-wrap rounded bg-gray-100 p-3 text-left dark:bg-gray-800">
+            {JSON.stringify(scannedResult, null, 2)}
+          </pre>
+        </div>
+      )}
     </Card>
   );
 };
