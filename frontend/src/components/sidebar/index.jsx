@@ -20,11 +20,20 @@ const Sidebar = ({ open, onClose }) => {
         <HiX />
       </span>
 
-      <div className={`mx-[56px] mt-[50px] flex items-center`}>
-        <div className="ml-1 mt-1 h-2.5 font-poppins text-[26px] font-bold uppercase text-navy-700 dark:text-white">
+      <div className="mx-[56px] mt-[50px] flex items-center gap-4">
+        {/* Logo */}
+        <img
+          src="https://www.gajshield.com/images/2020/04/01/gajshieldlogo4x.png"
+          alt="GajShield Logo"
+          className="h-10 w-auto"
+        />
+
+        {/* Title */}
+        {/* <div className="ml-1 mt-1 font-poppins text-[26px] font-bold uppercase text-navy-700 dark:text-white">
           HACK 8.0
-        </div>
+        </div> */}
       </div>
+
       <div class="mb-7 mt-[58px] h-px bg-gray-300 dark:bg-white/30" />
       {/* Nav item */}
 

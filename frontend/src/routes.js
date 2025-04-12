@@ -28,20 +28,12 @@ const routes = [
     component: <MainDashboard />,
   },
   {
-    name: "Results",
+    name: "Security Scan History",
     layout: "/admin",
     path: "results",
     icon: <MdBarChart className="h-6 w-6" />,
 
     component: <DataTables />,
-  },
-
-  {
-    name: "Profile",
-    layout: "/admin",
-    path: "profile",
-    icon: <MdPerson className="h-6 w-6" />,
-    component: <Profile />,
   },
 ];
 export default routes;
