@@ -27,7 +27,7 @@ const TotalSpent = () => {
   };
 
   const calculateCombinedScore = (hashData, emberData) => {
-    let hashScore = 0;
+    let hashScore = null;
     const stats = hashData?.results?.virustotal?.analysis_stats;
 
     if (stats) {
@@ -38,12 +38,15 @@ const TotalSpent = () => {
 
     const emberScore = emberData?.score ? parseFloat(emberData.score) * 100 : 0;
 
-    // 🧠 Adjust weights dynamically
-    if (hashScore < 10) {
-      // Trust EMBER more
+    // 🧠 Decision Logic
+    if (hashScore === null || isNaN(hashScore)) {
+      // If no hash score at all, rely entirely on EMBER
+      return Math.round(emberScore);
+    } else if (hashScore < 10) {
+      // Low hash score, trust EMBER more
       return Math.round(hashScore * 0.3 + emberScore * 0.7);
     } else {
-      // Default weights
+      // Regular weight distribution
       return Math.round(hashScore + emberScore * 0.4);
     }
   };
