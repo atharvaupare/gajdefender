@@ -8,7 +8,8 @@ const TotalSpent = () => {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState([]);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [processedCount, setProcessedCount] = useState(0);
+  const [concurrentLimit, setConcurrentLimit] = useState(5); // Configurable concurrent limit
 
   // Auto-scroll to results when they're ready or updated
   useEffect(() => {
@@ -22,7 +23,7 @@ const TotalSpent = () => {
     if (files.length > 0) {
       setSelectedFiles(files);
       setResults([]);
-      setCurrentIndex(0);
+      setProcessedCount(0);
     }
   };
 
@@ -96,127 +97,156 @@ const TotalSpent = () => {
     }
   };
 
+  // Process a single file and return its result
+  const processFile = async (file, index) => {
+    try {
+      // Initialize result with "processing" status
+      updateResultAtIndex(index, {
+        fileName: file.name,
+        fileSize: formatFileSize(file.size),
+        status: "processing",
+      });
+
+      // Step 1: Upload
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const uploadRes = await fetch("http://localhost:8000/files/upload", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!uploadRes.ok) {
+        throw new Error(`Upload failed with status: ${uploadRes.status}`);
+      }
+
+      const uploadData = await uploadRes.json();
+      const uploadedPath = uploadData.file_path;
+
+      // Step 2 & 3: Run hash scan and EMBER scan in parallel
+      const [hashRes, emberRes] = await Promise.all([
+        // Hash scan
+        fetch("http://localhost:8000/hash/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file_path: uploadedPath }),
+        }),
+        
+        // EMBER scan (uploading file again)
+        (() => {
+          const emberForm = new FormData();
+          emberForm.append("file", file);
+          return fetch("http://localhost:8000/ember/", {
+            method: "POST",
+            body: emberForm,
+          });
+        })()
+      ]);
+
+      if (!hashRes.ok) {
+        throw new Error(`Hash scan failed with status: ${hashRes.status}`);
+      }
+      if (!emberRes.ok) {
+        throw new Error(`Ember scan failed with status: ${emberRes.status}`);
+      }
+
+      const [hashData, emberData] = await Promise.all([
+        hashRes.json(),
+        emberRes.json()
+      ]);
+
+      // Step 4: Calculate Combined Score
+      const combinedScore = calculateCombinedScore(hashData, emberData);
+
+      // Create the completed result
+      const completedResult = {
+        fileName: file.name,
+        fileSize: formatFileSize(file.size),
+        sha256: hashData?.sha256,
+        hashData,
+        emberData,
+        score: combinedScore,
+        status: "completed",
+        scanDate: new Date().toISOString(),
+      };
+
+      return completedResult;
+    } catch (error) {
+      console.error(`Error scanning file ${file.name}:`, error);
+      return {
+        fileName: file.name,
+        fileSize: formatFileSize(file.size),
+        error: true,
+        errorMessage: error.message || "Processing failed",
+        status: "error",
+        scanDate: new Date().toISOString(),
+      };
+    }
+  };
+
+  // Helper function to update a specific result by index
+  const updateResultAtIndex = (index, newResultData) => {
+    setResults((prev) => {
+      const newResults = [...prev];
+      newResults[index] = newResultData;
+      return newResults;
+    });
+  };
+
   const handleScan = async () => {
     if (selectedFiles.length === 0) return;
 
     setProcessing(true);
-    setResults([]);
-    setCurrentIndex(0);
+    setResults(selectedFiles.map(file => ({
+      fileName: file.name,
+      fileSize: formatFileSize(file.size),
+      status: "queued"
+    })));
+    setProcessedCount(0);
 
-    await processFiles();
+    await processFilesInBatches();
   };
 
-  const processFiles = async () => {
-    const newResults = [];
-
-    for (let i = 0; i < selectedFiles.length; i++) {
-      setCurrentIndex(i);
-      const file = selectedFiles[i];
-
-      try {
-        // Update results with "processing" status for current file
-        setResults((prev) => [
-          ...prev,
-          {
-            fileName: file.name,
-            fileSize: formatFileSize(file.size),
-            status: "processing",
-          },
-        ]);
-
-        // Step 1: Upload
-        const formData = new FormData();
-        formData.append("file", file);
-
-        const uploadRes = await fetch("http://localhost:8000/files/upload", {
-          method: "POST",
-          body: formData,
-        });
-
-        if (!uploadRes.ok) {
-          throw new Error(`Upload failed with status: ${uploadRes.status}`);
-        }
-
-        const uploadData = await uploadRes.json();
-        const uploadedPath = uploadData.file_path;
-
-        // Step 2: Hash scan
-        const hashRes = await fetch("http://localhost:8000/hash/scan", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file_path: uploadedPath }),
-        });
-
-        if (!hashRes.ok) {
-          throw new Error(`Hash scan failed with status: ${hashRes.status}`);
-        }
-
-        const hashData = await hashRes.json();
-
-        // Step 3: Ember scan (upload file again)
-        const emberForm = new FormData();
-        emberForm.append("file", file);
-
-        const emberRes = await fetch("http://localhost:8000/ember/", {
-          method: "POST",
-          body: emberForm,
-        });
-
-        if (!emberRes.ok) {
-          throw new Error(`Ember scan failed with status: ${emberRes.status}`);
-        }
-
-        const emberData = await emberRes.json();
-
-        // Step 4: Calculate Combined Score
-        const combinedScore = calculateCombinedScore(hashData, emberData);
-
-        // Create the completed result
-        const completedResult = {
-          fileName: file.name,
-          fileSize: formatFileSize(file.size),
-          sha256: hashData?.sha256,
-          hashData,
-          emberData,
-          score: combinedScore,
-          status: "completed",
-          scanDate: new Date().toISOString(),
-        };
-
-        // Update the results state
-        setResults((prev) => {
-          const newResults = [...prev];
-          newResults[i] = completedResult;
-          return newResults;
-        });
-      } catch (error) {
-        console.error(`Error scanning file ${file.name}:`, error);
-        // Update with error status
-        setResults((prev) => {
-          const newResults = [...prev];
-          newResults[i] = {
-            fileName: file.name,
-            fileSize: formatFileSize(file.size),
-            error: true,
-            errorMessage: error.message || "Processing failed",
-            status: "error",
-            scanDate: new Date().toISOString(),
-          };
-          return newResults;
-        });
+  // Process files in batches with a concurrent limit
+  const processFilesInBatches = async () => {
+    const results = [];
+    let currentIndex = 0;
+    
+    // Process files in batches
+    while (currentIndex < selectedFiles.length) {
+      const batch = [];
+      const batchSize = Math.min(concurrentLimit, selectedFiles.length - currentIndex);
+      
+      // Create batch of file processing promises
+      for (let i = 0; i < batchSize; i++) {
+        const fileIndex = currentIndex + i;
+        const file = selectedFiles[fileIndex];
+        batch.push(processFile(file, fileIndex).then(result => {
+          // Update processed count as each file completes
+          setProcessedCount(prev => prev + 1);
+          return { result, index: fileIndex };
+        }));
       }
+      
+      // Wait for all files in the batch to complete
+      const batchResults = await Promise.all(batch);
+      
+      // Process results and update state
+      batchResults.forEach(({ result, index }) => {
+        updateResultAtIndex(index, result);
+        results[index] = result;
+      });
+      
+      // Move to next batch
+      currentIndex += batchSize;
     }
 
-    // After all files are processed, save the results to localStorage
-    setResults((prev) => {
-      // Only save completed or error results
-      const finalResults = prev.filter(
-        (result) => result.status === "completed" || result.status === "error"
-      );
-      saveResultsToLocalStorage(finalResults);
-      return prev;
-    });
-
+    // Save completed results to localStorage
+    const finalResults = results.filter(
+      (result) => result && (result.status === "completed" || result.status === "error")
+    );
+    saveResultsToLocalStorage(finalResults);
+    
     setProcessing(false);
   };
 
@@ -231,7 +261,7 @@ const TotalSpent = () => {
   const resetUpload = () => {
     setSelectedFiles([]);
     setResults([]);
-    setCurrentIndex(0);
+    setProcessedCount(0);
     if (fileInputRef.current) {
       fileInputRef.current.value = "";
     }
@@ -250,7 +280,15 @@ const TotalSpent = () => {
       const files = Array.from(e.dataTransfer.files);
       setSelectedFiles(files);
       setResults([]);
-      setCurrentIndex(0);
+      setProcessedCount(0);
+    }
+  };
+
+  // Handle concurrent limit change
+  const handleConcurrentLimitChange = (e) => {
+    const value = parseInt(e.target.value);
+    if (!isNaN(value) && value > 0 && value <= 10) {
+      setConcurrentLimit(value);
     }
   };
 
@@ -337,7 +375,23 @@ const TotalSpent = () => {
         </div>
       )}
 
-      <div className="mb-6 flex justify-center">
+      <div className="mb-6 flex flex-wrap items-center justify-center gap-4">
+        <div className="flex items-center">
+          <label htmlFor="concurrent-limit" className="mr-2 text-sm font-medium text-navy-700 dark:text-white">
+            Concurrent files:
+          </label>
+          <input
+            id="concurrent-limit"
+            type="number"
+            min="1"
+            max="10"
+            value={concurrentLimit}
+            onChange={handleConcurrentLimitChange}
+            className="w-16 rounded-md border border-gray-300 px-2 py-1 text-sm"
+            disabled={processing}
+          />
+        </div>
+        
         <button
           disabled={selectedFiles.length === 0 || processing}
           onClick={handleScan}
@@ -348,7 +402,7 @@ const TotalSpent = () => {
           }`}
         >
           {processing
-            ? `Scanning (${currentIndex + 1}/${selectedFiles.length})`
+            ? `Scanning (${processedCount}/${selectedFiles.length})`
             : "Scan All Files"}
         </button>
       </div>
@@ -359,12 +413,12 @@ const TotalSpent = () => {
             <div
               className="h-2.5 rounded-full bg-blue-500 transition-all duration-300"
               style={{
-                width: `${((currentIndex + 1) / selectedFiles.length) * 100}%`,
+                width: `${(processedCount / selectedFiles.length) * 100}%`,
               }}
             ></div>
           </div>
           <p className="mt-1 text-center text-xs text-gray-500">
-            Processing {currentIndex + 1} of {selectedFiles.length}
+            Processed {processedCount} of {selectedFiles.length}
           </p>
         </div>
       )}
@@ -381,7 +435,7 @@ const TotalSpent = () => {
                 className="rounded-lg border border-gray-200 bg-white p-4 shadow-md dark:border-gray-700 dark:bg-gray-800"
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.4, delay: index * 0.1 }}
+                transition={{ duration: 0.4, delay: index * 0.05 }}
               >
                 <div className="mb-2 flex items-start justify-between">
                   <div>
@@ -391,7 +445,13 @@ const TotalSpent = () => {
                     <p className="text-xs text-gray-500">{result.fileSize}</p>
                   </div>
 
-                  {result.status === "processing" ? (
+                  {result.status === "queued" ? (
+                    <div className="flex items-center">
+                      <span className="text-xs text-gray-500">
+                        Queued
+                      </span>
+                    </div>
+                  ) : result.status === "processing" ? (
                     <div className="flex items-center">
                       <div className="border-t-transparent mr-2 h-4 w-4 animate-spin rounded-full border-2 border-blue-500"></div>
                       <span className="text-xs text-blue-500">
