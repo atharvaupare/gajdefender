@@ -29,14 +29,23 @@ const TotalSpent = () => {
   const calculateCombinedScore = (hashData, emberData) => {
     let hashScore = 0;
     const stats = hashData?.results?.virustotal?.analysis_stats;
+
     if (stats) {
       const total =
         stats.harmless + stats.undetected + stats.malicious + stats.suspicious;
       hashScore = (stats.malicious / (total || 1)) * 60;
     }
 
-    const emberScore = emberData?.score ? parseFloat(emberData.score) * 40 : 0;
-    return Math.round(hashScore + emberScore);
+    const emberScore = emberData?.score ? parseFloat(emberData.score) * 100 : 0;
+
+    // 🧠 Adjust weights dynamically
+    if (hashScore < 10) {
+      // Trust EMBER more
+      return Math.round(hashScore * 0.3 + emberScore * 0.7);
+    } else {
+      // Default weights
+      return Math.round(hashScore + emberScore * 0.4);
+    }
   };
 
   const getScoreColor = (score) => {
