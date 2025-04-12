@@ -3,6 +3,7 @@ from app.routes import user  # We'll create user.
 from app.routes.hash_routes import router as hash_router
 from app.routes.ember_routes import router as ember_router  # 👈 NEW
 from app.routes.upload_router import router as upload_router
+from app.routes.combined_model_routes import router as combined_router
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -17,6 +18,7 @@ app.add_middleware(
 )
 
 app.include_router(upload_router, prefix="/files", tags=["Upload"])
+app.include_router(combined_router, prefix="/combined", tags=["Combined Model"])
 
 
 # Include the user router
