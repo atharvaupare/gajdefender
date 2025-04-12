@@ -9,8 +9,9 @@ services:
     volumes:
       - ./:/app
       - "C:/Users/Atharva/Downloads/gajshieldtest:/downloads/gajshieldtest"
+      - "E:/webdev/gajsheild/backend/uploads:/app/uploads"
 
-       # Mount the Linux download folder into the container at /downloads/gajshieldtest
+        # Mount the Linux download folder into the container at /downloads/gajshieldtest
       # - "/home/atharva/Downloads/gajshieldtest:/downloads/gajshieldtest"
 
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
