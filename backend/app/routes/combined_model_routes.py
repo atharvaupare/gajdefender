@@ -42,19 +42,19 @@ async def combined_model_scan(file: UploadFile = File(...)):
         classifier_used = None
 
         if file_type == "pdf" and pdf_model:
-            features = np.load("features/features_pdf.npy")[:1]  # dummy sample
+            features = np.load("app/features/features_pdf.npy")[:1]  # dummy sample
             pred = pdf_model.predict(features)[0]
             classifier_used = "PDF"
             label = "malware" if pred == 1 else "benign"
 
         elif file_type == "doc" and doc_model:
-            features = np.load("features/features_doc.npy")[:1]
+            features = np.load("app/features/features_doc.npy")[:1]
             pred = doc_model.predict(features)[0]
             classifier_used = "DOC"
             label = "malware" if pred == 1 else "benign"
 
         elif file_type == "js" and js_model:
-            features = np.load("features/features_js.npy")[:1]
+            features = np.load("app/features/features_js.npy")[:1]
             pred = js_model.predict(features)[0]
             classifier_used = "JS"
             label = "malware" if pred == 1 else "benign"
