@@ -9,9 +9,8 @@ const TotalSpent = () => {
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState([]);
   const [processedCount, setProcessedCount] = useState(0);
-  const [concurrentLimit, setConcurrentLimit] = useState(5); // Configurable concurrent limit
+  const [concurrentLimit, setConcurrentLimit] = useState(5);
 
-  // Auto-scroll to results when they're ready or updated
   useEffect(() => {
     if (results.length > 0 && resultsRef.current) {
       resultsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -27,29 +26,31 @@ const TotalSpent = () => {
     }
   };
 
-  const calculateCombinedScore = (hashData, emberData) => {
-    let hashScore = null;
-    const stats = hashData?.results?.virustotal?.analysis_stats;
-
-    if (stats) {
+  const calculateCombinedScore = (hashData, emberData, combinedData) => {
+    let vtScore = 0;
+    const vtStats = hashData?.results?.virustotal?.analysis_stats;
+    if (vtStats) {
       const total =
-        stats.harmless + stats.undetected + stats.malicious + stats.suspicious;
-      hashScore = (stats.malicious / (total || 1)) * 60;
+        vtStats.harmless +
+        vtStats.undetected +
+        vtStats.malicious +
+        vtStats.suspicious;
+      vtScore = (vtStats.malicious / (total || 1)) * 60;
     }
 
     const emberScore = emberData?.score ? parseFloat(emberData.score) * 100 : 0;
+    const mbScore = hashData?.results?.malwarebazaar?.exists ? 100 : 0;
 
-    // 🧠 Decision Logic
-    if (hashScore === null || isNaN(hashScore)) {
-      // If no hash score at all, rely entirely on EMBER
-      return Math.round(emberScore);
-    } else if (hashScore < 10) {
-      // Low hash score, trust EMBER more
-      return Math.round(hashScore * 0.3 + emberScore * 0.7);
-    } else {
-      // Regular weight distribution
-      return Math.round(hashScore + emberScore * 0.4);
-    }
+    let combinedVerdictScore = 0;
+    if (combinedData?.label === "malicious") combinedVerdictScore = 100;
+    else if (combinedData?.label === "suspicious") combinedVerdictScore = 50;
+    else combinedVerdictScore = 0;
+
+    return Math.round(
+      0.3 * ((vtScore + mbScore) / 2) +
+        0.3 * emberScore +
+        0.4 * combinedVerdictScore
+    );
   };
 
   const getScoreColor = (score) => {
@@ -66,113 +67,102 @@ const TotalSpent = () => {
 
   const saveResultsToLocalStorage = (results) => {
     try {
-      // Get existing results from localStorage
-      const existingResultsJSON = localStorage.getItem("securityScanResults");
-      let existingResults = existingResultsJSON
-        ? JSON.parse(existingResultsJSON)
-        : [];
-
-      // Add timestamp to new results
+      const existingResults = JSON.parse(
+        localStorage.getItem("securityScanResults") || "[]"
+      );
       const resultsWithTimestamp = results.map((result) => ({
         ...result,
         timestamp: new Date().toISOString(),
         id: `scan-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       }));
-
-      // Combine with existing results
       const updatedResults = [...resultsWithTimestamp, ...existingResults];
-
-      // Limit to 100 most recent scans to prevent localStorage from growing too large
-      const limitedResults = updatedResults.slice(0, 100);
-
-      // Save back to localStorage
       localStorage.setItem(
         "securityScanResults",
-        JSON.stringify(limitedResults)
+        JSON.stringify(updatedResults.slice(0, 100))
       );
-
-      console.log("Scan results saved to localStorage");
     } catch (error) {
-      console.error("Error saving results to localStorage:", error);
+      console.error("Error saving results:", error);
     }
   };
 
-  // Process a single file and return its result
+  const updateResultAtIndex = (index, newResultData) => {
+    setResults((prev) => {
+      const newResults = [...prev];
+      newResults[index] = newResultData;
+      return newResults;
+    });
+  };
+
   const processFile = async (file, index) => {
     try {
-      // Initialize result with "processing" status
       updateResultAtIndex(index, {
         fileName: file.name,
         fileSize: formatFileSize(file.size),
         status: "processing",
       });
 
-      // Step 1: Upload
-      const formData = new FormData();
-      formData.append("file", file);
+      const uploadForm = new FormData();
+      uploadForm.append("file", file);
 
       const uploadRes = await fetch("http://localhost:8000/files/upload", {
         method: "POST",
-        body: formData,
+        body: uploadForm,
       });
 
-      if (!uploadRes.ok) {
-        throw new Error(`Upload failed with status: ${uploadRes.status}`);
-      }
-
+      if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
       const uploadData = await uploadRes.json();
-      const uploadedPath = uploadData.file_path;
+      const filePath = uploadData.file_path;
 
-      // Step 2 & 3: Run hash scan and EMBER scan in parallel
-      const [hashRes, emberRes] = await Promise.all([
-        // Hash scan
-        fetch("http://localhost:8000/hash/scan", {
+      const hashRes = await fetch("http://localhost:8000/hash/scan", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ file_path: filePath }),
+      });
+
+      if (!hashRes.ok) throw new Error(`Hash scan failed: ${hashRes.status}`);
+
+      const emberForm = new FormData();
+      emberForm.append("file", file);
+      const combinedForm = new FormData();
+      combinedForm.append("file", file);
+
+      const [emberRes, combinedRes] = await Promise.all([
+        fetch("http://localhost:8000/ember/", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ file_path: uploadedPath }),
+          body: emberForm,
         }),
-        
-        // EMBER scan (uploading file again)
-        (() => {
-          const emberForm = new FormData();
-          emberForm.append("file", file);
-          return fetch("http://localhost:8000/ember/", {
-            method: "POST",
-            body: emberForm,
-          });
-        })()
+        fetch("http://localhost:8000/combined", {
+          method: "POST",
+          body: combinedForm,
+        }),
       ]);
 
-      if (!hashRes.ok) {
-        throw new Error(`Hash scan failed with status: ${hashRes.status}`);
-      }
-      if (!emberRes.ok) {
-        throw new Error(`Ember scan failed with status: ${emberRes.status}`);
-      }
+      if (!emberRes.ok)
+        throw new Error(`Ember scan failed: ${emberRes.status}`);
+      if (!combinedRes.ok)
+        throw new Error(`Combined scan failed: ${combinedRes.status}`);
 
-      const [hashData, emberData] = await Promise.all([
+      const [hashData, emberData, combinedData] = await Promise.all([
         hashRes.json(),
-        emberRes.json()
+        emberRes.json(),
+        combinedRes.json(),
       ]);
 
-      // Step 4: Calculate Combined Score
-      const combinedScore = calculateCombinedScore(hashData, emberData);
+      const score = calculateCombinedScore(hashData, emberData, combinedData);
 
-      // Create the completed result
-      const completedResult = {
+      return {
         fileName: file.name,
         fileSize: formatFileSize(file.size),
         sha256: hashData?.sha256,
         hashData,
         emberData,
-        score: combinedScore,
+        combinedData,
+        score,
         status: "completed",
         scanDate: new Date().toISOString(),
       };
-
-      return completedResult;
     } catch (error) {
-      console.error(`Error scanning file ${file.name}:`, error);
+      console.error(`Error scanning ${file.name}:`, error);
       return {
         fileName: file.name,
         fileSize: formatFileSize(file.size),
@@ -184,70 +174,60 @@ const TotalSpent = () => {
     }
   };
 
-  // Helper function to update a specific result by index
-  const updateResultAtIndex = (index, newResultData) => {
-    setResults((prev) => {
-      const newResults = [...prev];
-      newResults[index] = newResultData;
-      return newResults;
-    });
+  const processFilesInBatches = async () => {
+    const results = [];
+    let currentIndex = 0;
+
+    while (currentIndex < selectedFiles.length) {
+      const batch = [];
+      const batchSize = Math.min(
+        concurrentLimit,
+        selectedFiles.length - currentIndex
+      );
+
+      for (let i = 0; i < batchSize; i++) {
+        const fileIndex = currentIndex + i;
+        const file = selectedFiles[fileIndex];
+        batch.push(
+          processFile(file, fileIndex).then((result) => {
+            setProcessedCount((prev) => prev + 1);
+            return { result, index: fileIndex };
+          })
+        );
+      }
+
+      const batchResults = await Promise.all(batch);
+      batchResults.forEach(({ result, index }) => {
+        updateResultAtIndex(index, result);
+        results[index] = result;
+      });
+
+      currentIndex += batchSize;
+    }
+
+    saveResultsToLocalStorage(
+      results.filter(
+        (result) =>
+          result && (result.status === "completed" || result.status === "error")
+      )
+    );
+    setProcessing(false);
   };
 
   const handleScan = async () => {
     if (selectedFiles.length === 0) return;
 
     setProcessing(true);
-    setResults(selectedFiles.map(file => ({
-      fileName: file.name,
-      fileSize: formatFileSize(file.size),
-      status: "queued"
-    })));
+    setResults(
+      selectedFiles.map((file) => ({
+        fileName: file.name,
+        fileSize: formatFileSize(file.size),
+        status: "queued",
+      }))
+    );
     setProcessedCount(0);
 
     await processFilesInBatches();
-  };
-
-  // Process files in batches with a concurrent limit
-  const processFilesInBatches = async () => {
-    const results = [];
-    let currentIndex = 0;
-    
-    // Process files in batches
-    while (currentIndex < selectedFiles.length) {
-      const batch = [];
-      const batchSize = Math.min(concurrentLimit, selectedFiles.length - currentIndex);
-      
-      // Create batch of file processing promises
-      for (let i = 0; i < batchSize; i++) {
-        const fileIndex = currentIndex + i;
-        const file = selectedFiles[fileIndex];
-        batch.push(processFile(file, fileIndex).then(result => {
-          // Update processed count as each file completes
-          setProcessedCount(prev => prev + 1);
-          return { result, index: fileIndex };
-        }));
-      }
-      
-      // Wait for all files in the batch to complete
-      const batchResults = await Promise.all(batch);
-      
-      // Process results and update state
-      batchResults.forEach(({ result, index }) => {
-        updateResultAtIndex(index, result);
-        results[index] = result;
-      });
-      
-      // Move to next batch
-      currentIndex += batchSize;
-    }
-
-    // Save completed results to localStorage
-    const finalResults = results.filter(
-      (result) => result && (result.status === "completed" || result.status === "error")
-    );
-    saveResultsToLocalStorage(finalResults);
-    
-    setProcessing(false);
   };
 
   const formatFileSize = (bytes) => {
@@ -262,9 +242,7 @@ const TotalSpent = () => {
     setSelectedFiles([]);
     setResults([]);
     setProcessedCount(0);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleDragOver = (e) => {
@@ -284,7 +262,6 @@ const TotalSpent = () => {
     }
   };
 
-  // Handle concurrent limit change
   const handleConcurrentLimitChange = (e) => {
     const value = parseInt(e.target.value);
     if (!isNaN(value) && value > 0 && value <= 10) {
@@ -295,9 +272,10 @@ const TotalSpent = () => {
   return (
     <Card extra="!p-[20px]">
       <div className="mb-6 text-center text-xl font-bold text-navy-700 dark:text-white">
-        Security File Analyzer
+        Advanced File Security Analyzer
       </div>
 
+      {/* Upload Zone */}
       <div className="mb-4">
         <div
           className="cursor-pointer rounded-lg border-2 border-dashed border-blue-400 bg-gray-50 p-6 text-center transition-all duration-200 hover:bg-blue-50"
@@ -309,8 +287,8 @@ const TotalSpent = () => {
             <svg
               xmlns="http://www.w3.org/2000/svg"
               className="h-10 w-10 text-blue-500"
-              viewBox="0 0 20 20"
               fill="currentColor"
+              viewBox="0 0 20 20"
             >
               <path
                 fillRule="evenodd"
@@ -334,6 +312,7 @@ const TotalSpent = () => {
         </div>
       </div>
 
+      {/* Selected Files List */}
       {selectedFiles.length > 0 && (
         <div className="mb-4 rounded-lg bg-gray-100 p-3 dark:bg-gray-800">
           <div className="mb-2 flex items-center justify-between">
@@ -358,8 +337,8 @@ const TotalSpent = () => {
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   className="mr-1 h-3 w-3 text-blue-500"
-                  viewBox="0 0 20 20"
                   fill="currentColor"
+                  viewBox="0 0 20 20"
                 >
                   <path
                     fillRule="evenodd"
@@ -375,9 +354,13 @@ const TotalSpent = () => {
         </div>
       )}
 
+      {/* Controls */}
       <div className="mb-6 flex flex-wrap items-center justify-center gap-4">
         <div className="flex items-center">
-          <label htmlFor="concurrent-limit" className="mr-2 text-sm font-medium text-navy-700 dark:text-white">
+          <label
+            htmlFor="concurrent-limit"
+            className="mr-2 text-sm font-medium text-navy-700 dark:text-white"
+          >
             Concurrent files:
           </label>
           <input
@@ -391,7 +374,7 @@ const TotalSpent = () => {
             disabled={processing}
           />
         </div>
-        
+
         <button
           disabled={selectedFiles.length === 0 || processing}
           onClick={handleScan}
@@ -407,6 +390,7 @@ const TotalSpent = () => {
         </button>
       </div>
 
+      {/* Progress Bar */}
       {processing && (
         <div className="mb-6">
           <div className="h-2.5 w-full rounded-full bg-gray-200 dark:bg-gray-700">
@@ -423,6 +407,7 @@ const TotalSpent = () => {
         </div>
       )}
 
+      {/* Results */}
       {results.length > 0 && (
         <div className="mt-6" ref={resultsRef}>
           <h3 className="text-md mb-3 font-semibold text-navy-700 dark:text-white">
@@ -446,11 +431,7 @@ const TotalSpent = () => {
                   </div>
 
                   {result.status === "queued" ? (
-                    <div className="flex items-center">
-                      <span className="text-xs text-gray-500">
-                        Queued
-                      </span>
-                    </div>
+                    <span className="text-xs text-gray-500">Queued</span>
                   ) : result.status === "processing" ? (
                     <div className="flex items-center">
                       <div className="border-t-transparent mr-2 h-4 w-4 animate-spin rounded-full border-2 border-blue-500"></div>
@@ -460,19 +441,7 @@ const TotalSpent = () => {
                     </div>
                   ) : result.status === "error" ? (
                     <div className="flex items-center rounded bg-red-100 px-2 py-1 text-xs text-red-600">
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="mr-1 h-3 w-3"
-                        viewBox="0 0 20 20"
-                        fill="currentColor"
-                      >
-                        <path
-                          fillRule="evenodd"
-                          d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z"
-                          clipRule="evenodd"
-                        />
-                      </svg>
-                      Failed
+                      <span>Failed</span>
                     </div>
                   ) : (
                     <div
@@ -492,50 +461,94 @@ const TotalSpent = () => {
                 )}
 
                 {result.status === "completed" && (
-                  <div className="mt-2">
-                    <div className="mb-1 text-xs text-gray-700 dark:text-gray-300">
+                  <div className="mt-2 space-y-3 text-xs text-gray-700 dark:text-gray-300">
+                    <div>
                       <span className="font-semibold">SHA256:</span>
-                      <span className="ml-1 break-all font-mono text-xs">
+                      <span className="ml-1 break-all font-mono">
                         {result.sha256}
                       </span>
                     </div>
 
-                    <div className="mt-3 grid grid-cols-2 gap-2">
+                    <div className="grid grid-cols-2 gap-2">
+                      {/* VirusTotal */}
                       <div className="rounded bg-gray-50 p-2 dark:bg-gray-700">
-                        <p className="mb-1 text-xs font-semibold text-navy-700 dark:text-white">
+                        <p className="mb-1 font-semibold text-navy-700 dark:text-white">
                           VirusTotal
                         </p>
-                        <p className="text-xs text-gray-700 dark:text-gray-300">
-                          <span className="font-semibold">Type:</span>{" "}
-                          <span className="ml-1">
-                            {result.hashData?.results?.virustotal
-                              ?.type_description ?? "Unknown"}
-                          </span>
-                        </p>
-                        <p className="text-xs text-gray-700 dark:text-gray-300">
+                        <p>
                           <span className="font-semibold">Threat:</span>{" "}
-                          <span className="ml-1">
-                            {result.hashData?.results?.virustotal
-                              ?.threat_name ?? "None"}
-                          </span>
+                          {result.hashData?.results?.virustotal?.threat_name ||
+                            "None"}
+                        </p>
+                        <p>
+                          <span className="font-semibold">Score:</span>{" "}
+                          {result.hashData?.results?.virustotal
+                            ? `${Math.round(
+                                (result.hashData.results.virustotal
+                                  .analysis_stats.malicious /
+                                  (result.hashData.results.virustotal
+                                    .analysis_stats.harmless +
+                                    result.hashData.results.virustotal
+                                      .analysis_stats.undetected +
+                                    result.hashData.results.virustotal
+                                      .analysis_stats.malicious +
+                                    result.hashData.results.virustotal
+                                      .analysis_stats.suspicious)) *
+                                  100
+                              )}%`
+                            : "N/A"}
                         </p>
                       </div>
 
+                      {/* MalwareBazaar */}
                       <div className="rounded bg-gray-50 p-2 dark:bg-gray-700">
-                        <p className="mb-1 text-xs font-semibold text-navy-700 dark:text-white">
+                        <p className="mb-1 font-semibold text-navy-700 dark:text-white">
+                          MalwareBazaar
+                        </p>
+                        <p>
+                          <span className="font-semibold">Status:</span>{" "}
+                          {result.hashData?.results?.malwarebazaar?.exists
+                            ? "Known Malware"
+                            : "Not Found"}
+                        </p>
+                        <p>
+                          <span className="font-semibold">First Seen:</span>{" "}
+                          {result.hashData?.results?.malwarebazaar
+                            ?.first_seen || "N/A"}
+                        </p>
+                      </div>
+
+                      {/* Combined Model */}
+                      <div className="col-span-2 rounded bg-gray-50 p-2 dark:bg-gray-700">
+                        <p className="mb-1 font-semibold text-navy-700 dark:text-white">
+                          Combined Model
+                        </p>
+                        <p>
+                          <span className="font-semibold">Verdict:</span>{" "}
+                          {result.combinedData?.label || "Unknown"}
+                        </p>
+                        <p>
+                          <span className="font-semibold">Classifier:</span>{" "}
+                          {result.combinedData?.classifier || "N/A"}
+                        </p>
+                      </div>
+
+                      {/* EMBER */}
+                      <div className="col-span-2 rounded bg-gray-50 p-2 dark:bg-gray-700">
+                        <p className="mb-1 font-semibold text-navy-700 dark:text-white">
                           EMBER Analysis
                         </p>
-                        <p className="text-xs text-gray-700 dark:text-gray-300">
-                          <span className="font-semibold">Label:</span>{" "}
-                          <span className="ml-1">
-                            {result.emberData?.label ?? "N/A"}
-                          </span>
+                        <p>
+                          <span className="font-semibold">Prediction:</span>{" "}
+                          {result.emberData?.label || "N/A"}
                         </p>
-                        <p className="text-xs text-gray-700 dark:text-gray-300">
-                          <span className="font-semibold">Score:</span>{" "}
-                          <span className="ml-1">
-                            {result.emberData?.score ?? "N/A"}
-                          </span>
+                        <p>
+                          <span className="font-semibold">Confidence:</span>{" "}
+                          {result.emberData?.score
+                            ? `${(
+                                parseFloat(result.emberData.score) * 100
+                              ).toFixed(1)}%`
+                            : "N/A"}
                         </p>
                       </div>
                     </div>
