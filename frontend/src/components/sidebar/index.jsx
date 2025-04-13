@@ -20,12 +20,12 @@ const Sidebar = ({ open, onClose }) => {
         <HiX />
       </span>
 
-      <div className="mx-[56px] mt-[50px] flex items-center gap-4">
+      <div className="mx-[76px] mt-[50px] flex items-center gap-4">
         {/* Logo */}
         <img
-          src="https://www.gajshield.com/images/2020/04/01/gajshieldlogo4x.png"
+          src="https://mail.google.com/mail/u/2?ui=2&ik=73c4992d69&attid=0.1&permmsgid=msg-f:1829262965937346157&th=1962d8f9c579166d&view=fimg&fur=ip&permmsgid=msg-f:1829262965937346157&sz=s0-l75-ft&attbid=ANGjdJ9mQDmhZVcDt9TkAvPGqDho-knKqS45sJ7dcwllPOl322isq3fhKZ8UAoGB_hiSXoQ4P8cLjO6MqnVk3ulB3-tiR32S9NYQM9Kn46XtOslDRfUjAvy4l2nhjgw&disp=emb&realattid=ii_m9f6tczh0&zw"
           alt="GajShield Logo"
-          className="h-10 w-auto"
+          className="h-[160px] "
         />
 
         {/* Title */}
