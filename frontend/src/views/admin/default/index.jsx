@@ -9,8 +9,9 @@ const TotalSpent = () => {
   const [processing, setProcessing] = useState(false);
   const [results, setResults] = useState([]);
   const [processedCount, setProcessedCount] = useState(0);
-  const [concurrentLimit, setConcurrentLimit] = useState(5);
+  const [concurrentLimit, setConcurrentLimit] = useState(5); // Configurable concurrent limit
 
+  // Auto-scroll to results when they're ready or updated
   useEffect(() => {
     if (results.length > 0 && resultsRef.current) {
       resultsRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -27,31 +28,28 @@ const TotalSpent = () => {
   };
 
   const calculateCombinedScore = (hashData, emberData) => {
-    let vtScore = 0;
-    const vtStats = hashData?.results?.virustotal?.analysis_stats;
-    if (vtStats) {
+    let hashScore = null;
+    const stats = hashData?.results?.virustotal?.analysis_stats;
+
+    if (stats) {
       const total =
-        vtStats.harmless +
-        vtStats.undetected +
-        vtStats.malicious +
-        vtStats.suspicious;
-      vtScore = (vtStats.malicious / (total || 1)) * 60;
+        stats.harmless + stats.undetected + stats.malicious + stats.suspicious;
+      hashScore = (stats.malicious / (total || 1)) * 60;
     }
 
     const emberScore = emberData?.score ? parseFloat(emberData.score) * 100 : 0;
-    const mbScore = hashData?.results?.malwarebazaar?.exists ? 100 : 0;
 
-    const hasApiFindings = vtScore > 0 || mbScore > 0;
-
-    if (hasApiFindings) {
-      return Math.round(
-        0.3 * ((vtScore + mbScore) / 2) +
-          0.3 * emberScore +
-          0.4 * (vtScore + mbScore)
-      );
+    // 🧠 Decision Logic
+    if (hashScore === null || isNaN(hashScore)) {
+      // If no hash score at all, rely entirely on EMBER
+      return Math.round(emberScore);
+    } else if (hashScore < 10) {
+      // Low hash score, trust EMBER more
+      return Math.round(hashScore * 0.3 + emberScore * 0.7);
+    } else {
+      // Regular weight distribution
+      return Math.round(hashScore + emberScore * 0.4);
     }
-
-    return Math.round(0.7 * emberScore + 0.3 * ((vtScore + mbScore) / 2));
   };
 
   const getScoreColor = (score) => {
@@ -68,91 +66,113 @@ const TotalSpent = () => {
 
   const saveResultsToLocalStorage = (results) => {
     try {
-      const existingResults = JSON.parse(
-        localStorage.getItem("securityScanResults") || "[]"
-      );
+      // Get existing results from localStorage
+      const existingResultsJSON = localStorage.getItem("securityScanResults");
+      let existingResults = existingResultsJSON
+        ? JSON.parse(existingResultsJSON)
+        : [];
+
+      // Add timestamp to new results
       const resultsWithTimestamp = results.map((result) => ({
         ...result,
         timestamp: new Date().toISOString(),
         id: `scan-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
       }));
+
+      // Combine with existing results
       const updatedResults = [...resultsWithTimestamp, ...existingResults];
+
+      // Limit to 100 most recent scans to prevent localStorage from growing too large
+      const limitedResults = updatedResults.slice(0, 100);
+
+      // Save back to localStorage
       localStorage.setItem(
         "securityScanResults",
-        JSON.stringify(updatedResults.slice(0, 100))
+        JSON.stringify(limitedResults)
       );
+
+      console.log("Scan results saved to localStorage");
     } catch (error) {
-      console.error("Error saving results:", error);
+      console.error("Error saving results to localStorage:", error);
     }
   };
 
-  const updateResultAtIndex = (index, newResultData) => {
-    setResults((prev) => {
-      const newResults = [...prev];
-      newResults[index] = newResultData;
-      return newResults;
-    });
-  };
-
+  // Process a single file and return its result
   const processFile = async (file, index) => {
     try {
+      // Initialize result with "processing" status
       updateResultAtIndex(index, {
         fileName: file.name,
         fileSize: formatFileSize(file.size),
         status: "processing",
       });
 
-      const uploadForm = new FormData();
-      uploadForm.append("file", file);
+      // Step 1: Upload
+      const formData = new FormData();
+      formData.append("file", file);
 
       const uploadRes = await fetch("http://localhost:8000/files/upload", {
         method: "POST",
-        body: uploadForm,
+        body: formData,
       });
 
-      if (!uploadRes.ok) throw new Error(`Upload failed: ${uploadRes.status}`);
+      if (!uploadRes.ok) {
+        throw new Error(`Upload failed with status: ${uploadRes.status}`);
+      }
 
       const uploadData = await uploadRes.json();
-      const filePath = uploadData.file_path;
+      const uploadedPath = uploadData.file_path;
 
-      const hashRes = await fetch("http://localhost:8000/hash/scan", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ file_path: filePath }),
-      });
+      // Step 2 & 3: Run hash scan and EMBER scan in parallel
+      const [hashRes, emberRes] = await Promise.all([
+        // Hash scan
+        fetch("http://localhost:8000/hash/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ file_path: uploadedPath }),
+        }),
 
-      if (!hashRes.ok) throw new Error(`Hash scan failed: ${hashRes.status}`);
+        // EMBER scan (uploading file again)
+        (() => {
+          const emberForm = new FormData();
+          emberForm.append("file", file);
+          return fetch("http://localhost:8000/ember/", {
+            method: "POST",
+            body: emberForm,
+          });
+        })(),
+      ]);
 
-      const emberForm = new FormData();
-      emberForm.append("file", file);
-
-      const emberRes = await fetch("http://localhost:8000/ember/", {
-        method: "POST",
-        body: emberForm,
-      });
-
-      if (!emberRes.ok)
-        throw new Error(`Ember scan failed: ${emberRes.status}`);
+      if (!hashRes.ok) {
+        throw new Error(`Hash scan failed with status: ${hashRes.status}`);
+      }
+      if (!emberRes.ok) {
+        throw new Error(`Ember scan failed with status: ${emberRes.status}`);
+      }
 
       const [hashData, emberData] = await Promise.all([
         hashRes.json(),
         emberRes.json(),
       ]);
 
-      const score = calculateCombinedScore(hashData, emberData);
+      // Step 4: Calculate Combined Score
+      const combinedScore = calculateCombinedScore(hashData, emberData);
 
-      return {
+      // Create the completed result
+      const completedResult = {
         fileName: file.name,
         fileSize: formatFileSize(file.size),
         sha256: hashData?.sha256,
         hashData,
         emberData,
-        score,
+        score: combinedScore,
         status: "completed",
         scanDate: new Date().toISOString(),
       };
+
+      return completedResult;
     } catch (error) {
-      console.error(`Error scanning ${file.name}:`, error);
+      console.error(`Error scanning file ${file.name}:`, error);
       return {
         fileName: file.name,
         fileSize: formatFileSize(file.size),
@@ -164,44 +184,13 @@ const TotalSpent = () => {
     }
   };
 
-  const processFilesInBatches = async () => {
-    const results = [];
-    let currentIndex = 0;
-
-    while (currentIndex < selectedFiles.length) {
-      const batch = [];
-      const batchSize = Math.min(
-        concurrentLimit,
-        selectedFiles.length - currentIndex
-      );
-
-      for (let i = 0; i < batchSize; i++) {
-        const fileIndex = currentIndex + i;
-        const file = selectedFiles[fileIndex];
-        batch.push(
-          processFile(file, fileIndex).then((result) => {
-            setProcessedCount((prev) => prev + 1);
-            return { result, index: fileIndex };
-          })
-        );
-      }
-
-      const batchResults = await Promise.all(batch);
-      batchResults.forEach(({ result, index }) => {
-        updateResultAtIndex(index, result);
-        results[index] = result;
-      });
-
-      currentIndex += batchSize;
-    }
-
-    saveResultsToLocalStorage(
-      results.filter(
-        (result) =>
-          result && (result.status === "completed" || result.status === "error")
-      )
-    );
-    setProcessing(false);
+  // Helper function to update a specific result by index
+  const updateResultAtIndex = (index, newResultData) => {
+    setResults((prev) => {
+      const newResults = [...prev];
+      newResults[index] = newResultData;
+      return newResults;
+    });
   };
 
   const handleScan = async () => {
@@ -220,6 +209,55 @@ const TotalSpent = () => {
     await processFilesInBatches();
   };
 
+  // Process files in batches with a concurrent limit
+  const processFilesInBatches = async () => {
+    const results = [];
+    let currentIndex = 0;
+
+    // Process files in batches
+    while (currentIndex < selectedFiles.length) {
+      const batch = [];
+      const batchSize = Math.min(
+        concurrentLimit,
+        selectedFiles.length - currentIndex
+      );
+
+      // Create batch of file processing promises
+      for (let i = 0; i < batchSize; i++) {
+        const fileIndex = currentIndex + i;
+        const file = selectedFiles[fileIndex];
+        batch.push(
+          processFile(file, fileIndex).then((result) => {
+            // Update processed count as each file completes
+            setProcessedCount((prev) => prev + 1);
+            return { result, index: fileIndex };
+          })
+        );
+      }
+
+      // Wait for all files in the batch to complete
+      const batchResults = await Promise.all(batch);
+
+      // Process results and update state
+      batchResults.forEach(({ result, index }) => {
+        updateResultAtIndex(index, result);
+        results[index] = result;
+      });
+
+      // Move to next batch
+      currentIndex += batchSize;
+    }
+
+    // Save completed results to localStorage
+    const finalResults = results.filter(
+      (result) =>
+        result && (result.status === "completed" || result.status === "error")
+    );
+    saveResultsToLocalStorage(finalResults);
+
+    setProcessing(false);
+  };
+
   const formatFileSize = (bytes) => {
     if (bytes === 0) return "0 Bytes";
     const k = 1024;
@@ -232,7 +270,9 @@ const TotalSpent = () => {
     setSelectedFiles([]);
     setResults([]);
     setProcessedCount(0);
-    if (fileInputRef.current) fileInputRef.current.value = "";
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
   };
 
   const handleDragOver = (e) => {
@@ -252,6 +292,7 @@ const TotalSpent = () => {
     }
   };
 
+  // Handle concurrent limit change
   const handleConcurrentLimitChange = (e) => {
     const value = parseInt(e.target.value);
     if (!isNaN(value) && value > 0 && value <= 10) {
@@ -262,7 +303,7 @@ const TotalSpent = () => {
   return (
     <Card extra="!p-[20px]">
       <div className="mb-6 text-center text-xl font-bold text-navy-700 dark:text-white">
-        Advanced File Security Analyzer
+        Security File Analyzer
       </div>
 
       <div className="mb-4">
@@ -276,8 +317,8 @@ const TotalSpent = () => {
             <svg
               xmlns="http://www.w3.org/2000/svg"
               className="h-10 w-10 text-blue-500"
-              fill="currentColor"
               viewBox="0 0 20 20"
+              fill="currentColor"
             >
               <path
                 fillRule="evenodd"
@@ -325,8 +366,8 @@ const TotalSpent = () => {
                 <svg
                   xmlns="http://www.w3.org/2000/svg"
                   className="mr-1 h-3 w-3 text-blue-500"
-                  fill="currentColor"
                   viewBox="0 0 20 20"
+                  fill="currentColor"
                 >
                   <path
                     fillRule="evenodd"
@@ -416,7 +457,9 @@ const TotalSpent = () => {
                   </div>
 
                   {result.status === "queued" ? (
-                    <span className="text-xs text-gray-500">Queued</span>
+                    <div className="flex items-center">
+                      <span className="text-xs text-gray-500">Queued</span>
+                    </div>
                   ) : result.status === "processing" ? (
                     <div className="flex items-center">
                       <div className="border-t-transparent mr-2 h-4 w-4 animate-spin rounded-full border-2 border-blue-500"></div>
@@ -469,65 +512,39 @@ const TotalSpent = () => {
                     <div className="mt-3 grid grid-cols-2 gap-2">
                       <div className="rounded bg-gray-50 p-2 dark:bg-gray-700">
                         <p className="mb-1 text-xs font-semibold text-navy-700 dark:text-white">
-                          VirusTotal
+                          VirusTotal & MalwareBazaar
+                        </p>
+                        <p className="text-xs text-gray-700 dark:text-gray-300">
+                          <span className="font-semibold">Type:</span>{" "}
+                          <span className="ml-1">
+                            {result.hashData?.results?.virustotal
+                              ?.type_description ?? "Unknown"}
+                          </span>
                         </p>
                         <p className="text-xs text-gray-700 dark:text-gray-300">
                           <span className="font-semibold">Threat:</span>{" "}
-                          {result.hashData?.results?.virustotal?.threat_name ||
-                            "None"}
-                        </p>
-                        <p className="text-xs text-gray-700 dark:text-gray-300">
-                          <span className="font-semibold">Score:</span>{" "}
-                          {result.hashData?.results?.virustotal
-                            ? `${Math.round(
-                                (result.hashData.results.virustotal
-                                  .analysis_stats.malicious /
-                                  (result.hashData.results.virustotal
-                                    .analysis_stats.harmless +
-                                    result.hashData.results.virustotal
-                                      .analysis_stats.undetected +
-                                    result.hashData.results.virustotal
-                                      .analysis_stats.malicious +
-                                    result.hashData.results.virustotal
-                                      .analysis_stats.suspicious)) *
-                                  100
-                              )}%`
-                            : "N/A"}
+                          <span className="ml-1">
+                            {result.hashData?.results?.virustotal
+                              ?.threat_name ?? "None"}
+                          </span>
                         </p>
                       </div>
 
                       <div className="rounded bg-gray-50 p-2 dark:bg-gray-700">
                         <p className="mb-1 text-xs font-semibold text-navy-700 dark:text-white">
-                          MalwareBazaar
-                        </p>
-                        <p className="text-xs text-gray-700 dark:text-gray-300">
-                          <span className="font-semibold">Status:</span>{" "}
-                          {result.hashData?.results?.malwarebazaar?.exists
-                            ? "Known Malware"
-                            : "Not Found"}
-                        </p>
-                        <p className="text-xs text-gray-700 dark:text-gray-300">
-                          <span className="font-semibold">First Seen:</span>{" "}
-                          {result.hashData?.results?.malwarebazaar
-                            ?.first_seen || "N/A"}
-                        </p>
-                      </div>
-
-                      <div className="col-span-2 rounded bg-gray-50 p-2 dark:bg-gray-700">
-                        <p className="mb-1 text-xs font-semibold text-navy-700 dark:text-white">
                           EMBER Analysis
                         </p>
                         <p className="text-xs text-gray-700 dark:text-gray-300">
-                          <span className="font-semibold">Prediction:</span>{" "}
-                          {result.emberData?.label || "N/A"}
+                          <span className="font-semibold">Label:</span>{" "}
+                          <span className="ml-1">
+                            {result.emberData?.label ?? "N/A"}
+                          </span>
                         </p>
                         <p className="text-xs text-gray-700 dark:text-gray-300">
-                          <span className="font-semibold">Confidence:</span>{" "}
-                          {result.emberData?.score
-                            ? `${(
-                                parseFloat(result.emberData.score) * 100
-                              ).toFixed(1)}%`
-                            : "N/A"}
+                          <span className="font-semibold">Score:</span>{" "}
+                          <span className="ml-1">
+                            {result.emberData?.score ?? "N/A"}
+                          </span>
                         </p>
                       </div>
                     </div>
