@@ -27,7 +27,7 @@ const TotalSpent = () => {
     }
   };
 
-  const calculateCombinedScore = (hashData, emberData) => {
+  const calculateCombinedScore = (hashData, emberData, combinedData) => {
     // Extract VirusTotal data
     let virusTotalScore = 0;
     const vtStats = hashData?.results?.virustotal?.analysis_stats;
@@ -64,29 +64,69 @@ const TotalSpent = () => {
     // EMBER score calculation
     const emberScore = emberData?.score ? parseFloat(emberData.score) * 100 : 0;
 
-    // 🧠 Decision Logic with all three scores
-    if (virusTotalScore === 0 && malwareBytesScore === 0) {
-      // If no VT or MB detections, rely more heavily on EMBER
+    // Combined API score calculation
+    let combinedApiScore = 0;
+    if (combinedData) {
+      if (combinedData.label === "malicious") {
+        combinedApiScore = 80; // High score for malicious labels
+      } else if (combinedData.label === "suspicious") {
+        combinedApiScore = 50; // Medium score for suspicious labels
+      } else if (combinedData.label === "benign") {
+        combinedApiScore = 0; // Zero score for benign labels
+      } else {
+        // Default score for unknown labels
+        combinedApiScore = 20;
+      }
+    }
+
+    // 🧠 Decision Logic with all four scores
+    if (
+      virusTotalScore === 0 &&
+      malwareBytesScore === 0 &&
+      combinedApiScore === 0
+    ) {
+      // If no VT, MB, or combined API detections, rely more heavily on EMBER
       return Math.round(emberScore);
-    } else if (virusTotalScore > 30 && malwareBytesScore > 50) {
-      // If both VT and MB show strong signals, this is likely malicious
+    } else if (
+      virusTotalScore > 30 &&
+      (malwareBytesScore > 50 || combinedApiScore > 50)
+    ) {
+      // If VT and either MB or combined API show strong signals, this is likely malicious
       return Math.round(
-        Math.max(virusTotalScore, malwareBytesScore) + emberScore * 0.2
+        Math.max(virusTotalScore, malwareBytesScore, combinedApiScore) +
+          emberScore * 0.2
+      );
+    } else if (combinedApiScore > 70) {
+      // Very high combined API score, give it more weight
+      return Math.round(
+        virusTotalScore * 0.2 +
+          emberScore * 0.2 +
+          malwareBytesScore * 0.2 +
+          combinedApiScore * 0.4
       );
     } else if (malwareBytesScore > 60) {
       // High MalwareBytes score, give it more weight
       return Math.round(
-        virusTotalScore * 0.3 + emberScore * 0.2 + malwareBytesScore * 0.5
+        virusTotalScore * 0.2 +
+          emberScore * 0.2 +
+          combinedApiScore * 0.2 +
+          malwareBytesScore * 0.4
       );
     } else if (virusTotalScore > 40) {
       // High VirusTotal score, give it more weight
       return Math.round(
-        virusTotalScore * 0.5 + emberScore * 0.3 + malwareBytesScore * 0.2
+        virusTotalScore * 0.4 +
+          emberScore * 0.2 +
+          combinedApiScore * 0.2 +
+          malwareBytesScore * 0.2
       );
     } else {
       // Balanced approach for moderate or unclear results
       return Math.round(
-        virusTotalScore * 0.4 + emberScore * 0.3 + malwareBytesScore * 0.3
+        virusTotalScore * 0.3 +
+          emberScore * 0.2 +
+          combinedApiScore * 0.3 +
+          malwareBytesScore * 0.2
       );
     }
   };
@@ -101,6 +141,13 @@ const TotalSpent = () => {
     if (score <= 30) return "bg-green-100";
     if (score <= 70) return "bg-orange-100";
     return "bg-red-100";
+  };
+
+  const getLabelColor = (label) => {
+    if (label === "benign") return "text-green-500";
+    if (label === "suspicious") return "text-orange-400";
+    if (label === "malicious") return "text-red-500";
+    return "text-gray-500";
   };
 
   const saveResultsToLocalStorage = (results) => {
@@ -162,8 +209,8 @@ const TotalSpent = () => {
       const uploadData = await uploadRes.json();
       const uploadedPath = uploadData.file_path;
 
-      // Step 2 & 3: Run hash scan and EMBER scan in parallel
-      const [hashRes, emberRes] = await Promise.all([
+      // Step 2, 3, & 4: Run hash scan, EMBER scan, and combined scan in parallel
+      const [hashRes, emberRes, combinedRes] = await Promise.all([
         // Hash scan - includes both VirusTotal and MalwareBytes results
         fetch("http://localhost:8000/hash/scan", {
           method: "POST",
@@ -180,6 +227,16 @@ const TotalSpent = () => {
             body: emberForm,
           });
         })(),
+
+        // Combined API scan (uploading file again)
+        (() => {
+          const combinedForm = new FormData();
+          combinedForm.append("file", file);
+          return fetch("http://localhost:8000/combined", {
+            method: "POST",
+            body: combinedForm,
+          });
+        })(),
       ]);
 
       if (!hashRes.ok) {
@@ -188,14 +245,24 @@ const TotalSpent = () => {
       if (!emberRes.ok) {
         throw new Error(`Ember scan failed with status: ${emberRes.status}`);
       }
+      if (!combinedRes.ok) {
+        throw new Error(
+          `Combined scan failed with status: ${combinedRes.status}`
+        );
+      }
 
-      const [hashData, emberData] = await Promise.all([
+      const [hashData, emberData, combinedData] = await Promise.all([
         hashRes.json(),
         emberRes.json(),
+        combinedRes.json(),
       ]);
 
-      // Step 4: Calculate Combined Score with both VirusTotal and MalwareBytes results from hashData
-      const combinedScore = calculateCombinedScore(hashData, emberData);
+      // Step 5: Calculate Combined Score with all four data sources
+      const combinedScore = calculateCombinedScore(
+        hashData,
+        emberData,
+        combinedData
+      );
 
       // Create the completed result
       const completedResult = {
@@ -204,6 +271,7 @@ const TotalSpent = () => {
         sha256: hashData?.sha256,
         hashData,
         emberData,
+        combinedData,
         score: combinedScore,
         status: "completed",
         scanDate: new Date().toISOString(),
@@ -548,7 +616,7 @@ const TotalSpent = () => {
                       </span>
                     </div>
 
-                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2 lg:grid-cols-4">
                       <div className="rounded bg-gray-50 p-2 dark:bg-gray-700">
                         <p className="mb-1 text-xs font-semibold text-navy-700 dark:text-white">
                           VirusTotal
@@ -670,7 +738,141 @@ const TotalSpent = () => {
                           </span>
                         </p>
                       </div>
+
+                      <div className="rounded bg-gray-50 p-2 dark:bg-gray-700">
+                        <p className="mb-1 text-xs font-semibold text-navy-700 dark:text-white">
+                          File Classification
+                        </p>
+                        {result.combinedData ? (
+                          <>
+                            <p className="text-xs text-gray-700 dark:text-gray-300">
+                              <span className="font-semibold">File Type:</span>{" "}
+                              <span className="ml-1">
+                                {result.combinedData.file_type ?? "Unknown"}
+                              </span>
+                            </p>
+                            <p className="text-xs text-gray-700 dark:text-gray-300">
+                              <span className="font-semibold">Classifier:</span>{" "}
+                              <span className="ml-1">
+                                {result.combinedData.classifier ?? "Generic"}
+                              </span>
+                            </p>
+                            <p className="text-xs text-gray-700 dark:text-gray-300">
+                              <span className="font-semibold">Status:</span>{" "}
+                              <span
+                                className={`ml-1 font-medium ${getLabelColor(
+                                  result.combinedData.label
+                                )}`}
+                              >
+                                {result.combinedData.label
+                                  ? result.combinedData.label
+                                      .charAt(0)
+                                      .toUpperCase() +
+                                    result.combinedData.label.slice(1)
+                                  : "Unknown"}
+                              </span>
+                            </p>
+                          </>
+                        ) : (
+                          <p className="text-xs italic text-gray-500">
+                            No classification data available
+                          </p>
+                        )}
+                      </div>
                     </div>
+
+                    {/* Summary and Recommendation Section */}
+                    {result.status === "completed" && (
+                      <div className="mt-4 rounded bg-gray-50 p-3 dark:bg-gray-700">
+                        <p className="mb-1 text-xs font-semibold text-navy-700 dark:text-white">
+                          Analysis Summary
+                        </p>
+                        <div className="text-xs text-gray-700 dark:text-gray-300">
+                          {result.score > 70 ? (
+                            <div className="flex items-center">
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                className="mr-1 h-4 w-4 text-red-500"
+                                viewBox="0 0 20 20"
+                                fill="currentColor"
+                              >
+                                <path
+                                  fillRule="evenodd"
+                                  d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                              <span className="font-medium text-red-500">
+                                High risk file detected. Not recommended for
+                                use.
+                              </span>
+                            </div>
+                          ) : result.score > 30 ? (
+                            <div className="flex items-center">
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                className="mr-1 h-4 w-4 text-orange-500"
+                                viewBox="0 0 20 20"
+                                fill="currentColor"
+                              >
+                                <path
+                                  fillRule="evenodd"
+                                  d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                              <span className="font-medium text-orange-500">
+                                Medium risk file. Use with caution.
+                              </span>
+                            </div>
+                          ) : (
+                            <div className="flex items-center">
+                              <svg
+                                xmlns="http://www.w3.org/2000/svg"
+                                className="mr-1 h-4 w-4 text-green-500"
+                                viewBox="0 0 20 20"
+                                fill="currentColor"
+                              >
+                                <path
+                                  fillRule="evenodd"
+                                  d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z"
+                                  clipRule="evenodd"
+                                />
+                              </svg>
+                              <span className="font-medium text-green-500">
+                                Low risk file. Likely safe to use.
+                              </span>
+                            </div>
+                          )}
+
+                          <div className="mt-2">
+                            <span className="font-semibold">
+                              Detection sources:
+                            </span>{" "}
+                            <span>
+                              {[
+                                result.hashData?.results?.virustotal
+                                  ?.analysis_stats?.malicious > 0
+                                  ? "VirusTotal"
+                                  : null,
+                                result.hashData?.results?.malwarebytes?.detected
+                                  ? "MalwareBytes"
+                                  : null,
+                                parseFloat(result.emberData?.score || 0) > 0.5
+                                  ? "EMBER"
+                                  : null,
+                                result.combinedData?.label === "malicious" ||
+                                result.combinedData?.label === "suspicious"
+                                  ? "Classifier"
+                                  : null,
+                              ]
+                                .filter(Boolean)
+                                .join(", ") || "None"}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
               </motion.div>
