@@ -734,7 +734,9 @@ const TotalSpent = () => {
                                 : "text-green-500"
                             }`}
                           >
-                            {result.emberData?.score ?? "N/A"}
+                            {result.emberData?.score !== undefined
+                              ? parseFloat(result.emberData.score).toFixed(2)
+                              : "N/A"}
                           </span>
                         </p>
                       </div>
