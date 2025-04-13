@@ -1,6 +1,7 @@
 import React, { useRef, useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import Card from "components/card";
+import { generateAndDownloadReport } from "../generateReport";
 
 const TotalSpent = () => {
   const fileInputRef = useRef(null);
@@ -26,6 +27,76 @@ const TotalSpent = () => {
       setProcessedCount(0);
     }
   };
+
+  const [reportText, setReportText] = useState(null);
+  const [reportLoading, setReportLoading] = useState(false);
+
+  // Trigger from button
+  const handleReportClick = async () => {
+    setReportLoading(true);
+    await generateAndDownloadReport(results, setReportText);
+    setReportLoading(false);
+  };
+
+  // const generateReport = async (result) => {
+  //   const prompt = `
+  // Analyze the following malware scan result:
+
+  // File: ${result.fileName}
+  // Score: ${result.score}/100
+  // SHA256: ${result.sha256 || "N/A"}
+
+  // --- VirusTotal ---
+  // Threat: ${result.combinedData?.virustotal?.threat_name || "None"}
+  // Type: ${result.combinedData?.virustotal?.type_description || "Unknown"}
+  // Score: ${
+  //   result.combinedData?.virustotal?.analysis_stats?.malicious || 0
+  // } Malicious
+
+  // --- MalwareBazaar ---
+  // Known: ${result.combinedData?.malwarebazaar?.exists ? "Yes" : "No"}
+  // Tags: ${(result.combinedData?.malwarebazaar?.tags || []).join(", ")}
+
+  // --- EMBER ---
+  // Verdict: ${result.combinedData?.ember?.label}
+  // Confidence: ${result.combinedData?.ember?.score}
+
+  // Provide a security analyst-style summary of whether the file is malicious and why.
+  // `;
+
+  //   try {
+  //     const openaiRes = await fetch(
+  //       "https://api.openai.com/v1/chat/completions",
+  //       {
+  //         method: "POST",
+  //         headers: {
+  //           "Content-Type": "application/json",
+  //           Authorization: `Bearer ${OPENAI_API_KEY}`,
+  //         },
+  //         body: JSON.stringify({
+  //           model: "gpt-3.5-turbo",
+  //           messages: [{ role: "user", content: prompt }],
+  //           temperature: 0.7,
+  //         }),
+  //       }
+  //     );
+
+  //     const data = await openaiRes.json();
+  //     const summary = data.choices[0].message.content;
+
+  //     setResults((prev) => {
+  //       const updated = [...prev];
+  //       const idx = updated.findIndex((r) => r.fileName === result.fileName);
+  //       if (idx !== -1) {
+  //         updated[idx].report = summary;
+  //       }
+  //       return updated;
+  //     });
+  //   } catch (err) {
+  //     console.error("OpenAI error:", err);
+  //     alert("Failed to generate report.");
+  //   }
+  // };
 
   const calculateCombinedScore = (hashData, emberData, combinedData) => {
     // Extract VirusTotal data
@@ -844,6 +915,42 @@ const TotalSpent = () => {
                               <span className="font-medium text-green-500">
                                 Low risk file. Likely safe to use.
                               </span>
+                            </div>
+                          )}
+
+                          {result.status === "completed" && (
+                            <div className="mt-3 flex flex-col gap-2">
+                              {reportLoading ? (
+                                <div className="flex items-center gap-2 text-sm text-blue-500">
+                                  <svg
+                                    className="h-4 w-4 animate-spin"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                  >
+                                    <circle
+                                      className="opacity-25"
+                                      cx="12"
+                                      cy="12"
+                                      r="10"
+                                      stroke="currentColor"
+                                      strokeWidth="4"
+                                    ></circle>
+                                    <path
+                                      className="opacity-75"
+                                      fill="currentColor"
+                                      d="M4 12a8 8 0 018-8v8H4z"
+                                    ></path>
+                                  </svg>
+                                  Generating Report...
+                                </div>
+                              ) : (
+                                <button
+                                  className="rounded-md bg-indigo-500 px-4 py-1 text-sm text-white hover:bg-indigo-600"
+                                  onClick={handleReportClick}
+                                >
+                                  View Report
+                                </button>
+                              )}
                             </div>
                           )}
 

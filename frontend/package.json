@@ -19,6 +19,8 @@
     "apexcharts": "3.35.5",
     "axios": "^1.8.4",
     "framer-motion": "^12.6.5",
+    "html2pdf.js": "^0.10.3",
+    "marked": "^15.0.8",
     "react": "19.0.0",
     "react-apexcharts": "1.4.0",
     "react-calendar": "^5.0.0",
