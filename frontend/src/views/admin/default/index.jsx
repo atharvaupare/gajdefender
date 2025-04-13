@@ -28,27 +28,66 @@ const TotalSpent = () => {
   };
 
   const calculateCombinedScore = (hashData, emberData) => {
-    let hashScore = null;
-    const stats = hashData?.results?.virustotal?.analysis_stats;
+    // Extract VirusTotal data
+    let virusTotalScore = 0;
+    const vtStats = hashData?.results?.virustotal?.analysis_stats;
 
-    if (stats) {
+    if (vtStats) {
       const total =
-        stats.harmless + stats.undetected + stats.malicious + stats.suspicious;
-      hashScore = (stats.malicious / (total || 1)) * 60;
+        vtStats.harmless +
+        vtStats.undetected +
+        vtStats.malicious +
+        vtStats.suspicious;
+      virusTotalScore = (vtStats.malicious / (total || 1)) * 60;
     }
 
+    // Extract MalwareBytes data from hashData
+    let malwareBytesScore = 0;
+    const mbData = hashData?.results?.malwarebytes;
+
+    if (mbData) {
+      if (mbData.detected === true) {
+        // Base score if detected as malicious
+        malwareBytesScore = 50;
+
+        // Add additional weight based on threat level if available
+        if (mbData.threat_level === "high") {
+          malwareBytesScore = 80;
+        } else if (mbData.threat_level === "medium") {
+          malwareBytesScore = 60;
+        } else if (mbData.threat_level === "low") {
+          malwareBytesScore = 40;
+        }
+      }
+    }
+
+    // EMBER score calculation
     const emberScore = emberData?.score ? parseFloat(emberData.score) * 100 : 0;
 
-    // 🧠 Decision Logic
-    if (hashScore === null || isNaN(hashScore)) {
-      // If no hash score at all, rely entirely on EMBER
+    // 🧠 Decision Logic with all three scores
+    if (virusTotalScore === 0 && malwareBytesScore === 0) {
+      // If no VT or MB detections, rely more heavily on EMBER
       return Math.round(emberScore);
-    } else if (hashScore < 10) {
-      // Low hash score, trust EMBER more
-      return Math.round(hashScore * 0.3 + emberScore * 0.7);
+    } else if (virusTotalScore > 30 && malwareBytesScore > 50) {
+      // If both VT and MB show strong signals, this is likely malicious
+      return Math.round(
+        Math.max(virusTotalScore, malwareBytesScore) + emberScore * 0.2
+      );
+    } else if (malwareBytesScore > 60) {
+      // High MalwareBytes score, give it more weight
+      return Math.round(
+        virusTotalScore * 0.3 + emberScore * 0.2 + malwareBytesScore * 0.5
+      );
+    } else if (virusTotalScore > 40) {
+      // High VirusTotal score, give it more weight
+      return Math.round(
+        virusTotalScore * 0.5 + emberScore * 0.3 + malwareBytesScore * 0.2
+      );
     } else {
-      // Regular weight distribution
-      return Math.round(hashScore + emberScore * 0.4);
+      // Balanced approach for moderate or unclear results
+      return Math.round(
+        virusTotalScore * 0.4 + emberScore * 0.3 + malwareBytesScore * 0.3
+      );
     }
   };
 
@@ -125,7 +164,7 @@ const TotalSpent = () => {
 
       // Step 2 & 3: Run hash scan and EMBER scan in parallel
       const [hashRes, emberRes] = await Promise.all([
-        // Hash scan
+        // Hash scan - includes both VirusTotal and MalwareBytes results
         fetch("http://localhost:8000/hash/scan", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -155,7 +194,7 @@ const TotalSpent = () => {
         emberRes.json(),
       ]);
 
-      // Step 4: Calculate Combined Score
+      // Step 4: Calculate Combined Score with both VirusTotal and MalwareBytes results from hashData
       const combinedScore = calculateCombinedScore(hashData, emberData);
 
       // Create the completed result
@@ -509,10 +548,10 @@ const TotalSpent = () => {
                       </span>
                     </div>
 
-                    <div className="mt-3 grid grid-cols-2 gap-2">
+                    <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
                       <div className="rounded bg-gray-50 p-2 dark:bg-gray-700">
                         <p className="mb-1 text-xs font-semibold text-navy-700 dark:text-white">
-                          VirusTotal & MalwareBazaar
+                          VirusTotal
                         </p>
                         <p className="text-xs text-gray-700 dark:text-gray-300">
                           <span className="font-semibold">Type:</span>{" "}
@@ -528,6 +567,82 @@ const TotalSpent = () => {
                               ?.threat_name ?? "None"}
                           </span>
                         </p>
+                        {result.hashData?.results?.virustotal
+                          ?.analysis_stats && (
+                          <p className="text-xs text-gray-700 dark:text-gray-300">
+                            <span className="font-semibold">Detections:</span>{" "}
+                            <span className="ml-1">
+                              {
+                                result.hashData.results.virustotal
+                                  .analysis_stats.malicious
+                              }{" "}
+                              /
+                              {result.hashData.results.virustotal.analysis_stats
+                                .malicious +
+                                result.hashData.results.virustotal
+                                  .analysis_stats.harmless +
+                                result.hashData.results.virustotal
+                                  .analysis_stats.undetected +
+                                result.hashData.results.virustotal
+                                  .analysis_stats.suspicious}
+                            </span>
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="rounded bg-gray-50 p-2 dark:bg-gray-700">
+                        <p className="mb-1 text-xs font-semibold text-navy-700 dark:text-white">
+                          MalwareBytes
+                        </p>
+                        <p className="text-xs text-gray-700 dark:text-gray-300">
+                          <span className="font-semibold">Status:</span>{" "}
+                          <span
+                            className={`ml-1 ${
+                              result.hashData?.results?.malwarebytes?.detected
+                                ? "font-medium text-red-500"
+                                : "text-green-500"
+                            }`}
+                          >
+                            {result.hashData?.results?.malwarebytes?.detected
+                              ? "Detected"
+                              : "Clean"}
+                          </span>
+                        </p>
+                        {result.hashData?.results?.malwarebytes?.detected && (
+                          <>
+                            <p className="text-xs text-gray-700 dark:text-gray-300">
+                              <span className="font-semibold">Threat:</span>{" "}
+                              <span className="ml-1">
+                                {result.hashData.results.malwarebytes
+                                  .threat_name ?? "Malware"}
+                              </span>
+                            </p>
+                            {result.hashData.results.malwarebytes
+                              .threat_level && (
+                              <p className="text-xs text-gray-700 dark:text-gray-300">
+                                <span className="font-semibold">Level:</span>{" "}
+                                <span
+                                  className={`ml-1 ${
+                                    result.hashData.results.malwarebytes
+                                      .threat_level === "high"
+                                      ? "text-red-500"
+                                      : result.hashData.results.malwarebytes
+                                          .threat_level === "medium"
+                                      ? "text-orange-500"
+                                      : "text-yellow-500"
+                                  }`}
+                                >
+                                  {result.hashData.results.malwarebytes.threat_level
+                                    .charAt(0)
+                                    .toUpperCase() +
+                                    result.hashData.results.malwarebytes.threat_level.slice(
+                                      1
+                                    )}
+                                </span>
+                              </p>
+                            )}
+                          </>
+                        )}
                       </div>
 
                       <div className="rounded bg-gray-50 p-2 dark:bg-gray-700">
@@ -542,7 +657,15 @@ const TotalSpent = () => {
                         </p>
                         <p className="text-xs text-gray-700 dark:text-gray-300">
                           <span className="font-semibold">Score:</span>{" "}
-                          <span className="ml-1">
+                          <span
+                            className={`ml-1 ${
+                              parseFloat(result.emberData?.score || 0) > 0.7
+                                ? "text-red-500"
+                                : parseFloat(result.emberData?.score || 0) > 0.3
+                                ? "text-orange-500"
+                                : "text-green-500"
+                            }`}
+                          >
                             {result.emberData?.score ?? "N/A"}
                           </span>
                         </p>
