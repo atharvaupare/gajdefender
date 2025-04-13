@@ -2,6 +2,7 @@
 
 import { HiX } from "react-icons/hi";
 import Links from "./components/Links";
+import logo from "./gajdefenderlogo.png"
 
 // import SidebarCard from "components/sidebar/componentsrtl/SidebarCard";
 import routes from "routes.js";
@@ -23,7 +24,7 @@ const Sidebar = ({ open, onClose }) => {
       <div className="mx-[76px] mt-[50px] flex items-center gap-4">
         {/* Logo */}
         <img
-          src="https://mail.google.com/mail/u/2?ui=2&ik=73c4992d69&attid=0.1&permmsgid=msg-f:1829262965937346157&th=1962d8f9c579166d&view=fimg&fur=ip&permmsgid=msg-f:1829262965937346157&sz=s0-l75-ft&attbid=ANGjdJ9mQDmhZVcDt9TkAvPGqDho-knKqS45sJ7dcwllPOl322isq3fhKZ8UAoGB_hiSXoQ4P8cLjO6MqnVk3ulB3-tiR32S9NYQM9Kn46XtOslDRfUjAvy4l2nhjgw&disp=emb&realattid=ii_m9f6tczh0&zw"
+          src={logo}
           alt="GajShield Logo"
           className="h-[160px] "
         />
